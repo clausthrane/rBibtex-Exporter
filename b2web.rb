@@ -1,0 +1,172 @@
+#!/usr/bin/ruby
+# -*- coding: iso-8859-1 -*-
+# ----------------------------------------------------------------------------
+# "THE BEER-WARE LICENSE" (Revision 42):
+# <crt@cs.aau.dk> wrote this file. As long as you retain this notice you
+# can do whatever you want with this stuff. If we meet some day, and you think
+# this stuff is worth it, you can buy me a beer in return Claus Thrane
+# ----------------------------------------------------------------------------
+
+# This is a (dirt simple) bibtex to xml (+ xslt) web page converter
+
+require 'bibtex_parser'
+require 'analyzer'
+require 'dsxml'
+require 'cgi'
+
+class Web < XmlWriter
+
+  @global_nb = 1
+  @entry_nb = Hash.new(1)
+
+  def self.write(input, xsl = "default.xsl", replace = [], o = $stdout)
+    
+    $stderr << "Creating XML document w. the following data\n"
+    $stderr << "Output: #{o.path}\n"
+    $stderr << "Stylesheet: #{xsl}\n"
+
+    @out = o 
+    @substitution = replace 
+    @extras = input[0]
+
+    w "<?xml version=\"1.0\" encoding=\"ISO-8859-1\"?>\n"
+    w "<?xml-stylesheet type=\"text/xsl\" href=\"#{xsl}\"?>\n"
+    scope("bibliography") do
+
+      input[1].reverse.each do |entry|
+        
+        id, type = entry[0]
+        attributes = entry[1]
+        type = type.downcase
+
+        if not /string/ =~ type then
+
+          scope(type.downcase) do            
+            scope("id"){ w(id) }
+            scope("nb"){ w(@global_nb)}
+            scope("#{type}id"){ w(@entry_nb[type]) }
+
+            update_and_notify(type)
+ 
+            attributes.each do |key,value|
+              if not (key.nil? and value.nil?) then        
+                if(not handle_author(key,value)) then
+
+                  scope(key.downcase) do                  
+                    if  /^http/ =~ value then
+                      w(CGI::escapeHTML(value))
+                    else
+                      w(encode(value)) 
+                    end
+                  end
+
+                end        
+              end
+            end
+
+          end
+        end # not string
+      end
+      $stderr << " .. done\n"
+      $stderr.flush
+    end
+  end
+
+private
+
+  def self.update_and_notify(type)
+    @entry_nb[type] += 1
+    @global_nb += 1
+    # progress update
+    $stderr << "\r\e[0K #{@global_nb}"
+    $stderr.flush    
+  end
+
+  def self.handle_author(key, value)
+    
+    return false if(not key.downcase.eql?("author"))
+
+    scope("authors") do
+      authors = value.split(" and ")
+      authors.each do |a|
+        scope("author") do
+          scope("name") do
+
+            if @extras.has_key?(a) then
+              name = @extras[a][0]
+            else
+              name = a  
+            end            
+            w(encode(name))
+
+          end
+          scope("url") do
+            
+            if @extras.has_key?(a) then
+              url = @extras[a][1]
+            else
+              url = google(a)  
+            end            
+            w(url)
+
+          end
+        end
+      end
+    end
+  end
+
+  def self.google(key)
+    #we need to consult external datasource
+    return "http://www.google.com/search?q=\"#{key}\""
+  end
+
+end
+
+
+
+ARGV.each do |file|
+
+  
+  ## pretty HTML replacements of TeX in bibtex file  
+  replace = [#
+             [/\\v\{r\}/,"r"],
+             [/\\v\{s\}/,"s"],
+             [/\\v\{c\}/,"c"],
+             [/\\v\{C\}/,"C"],
+             [/\\\'\{a\}/,"á"],
+             [/\\\"u/,"ü"],
+             [/\\\"\{u\}/,"ü"],
+             [/\\tt/,""],
+             [/\~/," "],
+             [/\$\\sim\$/,"~"],
+             [/\\o/, "ø"],
+             [/\"e/, "ë"],
+             [/\\\'\{\\i\}/,"i"],
+             [/\\\'\{y\}/,"y"],
+             [/\'o/,"ó"],
+             [/\\v\s*r/,"r"],
+             [/\"a/,"ä"],
+             [/\"o/,"ö"],
+#             [/\\/,""],
+             [/\{|\}/,""],
+#             [/\'/,""]
+            ]
+
+  ## optional stuff
+
+  basename = file.split('.')[-2]
+
+  xml = File.new("#{basename}.xml", File::CREAT|File::TRUNC|File::RDWR, 0644)
+
+  puts "Parsing bib"
+  ast = Parser.parse(file)
+
+  puts "Removing dups"
+  DsAnalyzer.remove_duplicates!(ast)
+
+  Web.write(ast, "xsl/#{basename}.xsl", replace, xml)
+
+  # This will do - will output xml on stdout
+  #Xml.write(Parser.parse(file))
+
+end
